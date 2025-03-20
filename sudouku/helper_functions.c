@@ -11,15 +11,15 @@ bool duplicateNumbersinRow(int **board, int x, int size, int value)
 {
     int side = sqrt(size); 
     for(int i = 0; i < side; i ++){
-        if(board[x][i] != 0)
-        {       
+        //if(board[x][i] != 0)
+        //{       
             if( board[x][i] == value)
             {
                         //printf(" duplicate numbers in row returning true %d %d, i = %d, j = %d \n", board[x][i], board[x][j], i, j);
                         return true; 
             }
                            
-        }
+        //}
             
     }
     return false; 
@@ -29,8 +29,8 @@ bool duplicateNumbersinCol(int **board, int y, int size, int value)
 {
     int side = sqrt(size); 
     for(int i = 0; i < side; i ++){
-        if(board[i][y] != 0)
-        {
+        //if(board[i][y] != 0)
+        //{
             
             if( board[i][y] == value)
             {
@@ -38,7 +38,7 @@ bool duplicateNumbersinCol(int **board, int y, int size, int value)
                     return true; 
             }
                           
-        } 
+        //} 
     }  
     
     return false; 

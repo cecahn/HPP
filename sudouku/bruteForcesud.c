@@ -27,8 +27,6 @@ int ** copyBoard(int size, int **ogboard){
         board[i] = row + size * i;
     }
 
-    
-
     for (int i = 0; i <size; i ++){
         for(int j = 0; j <size; j ++){
             board[i][j] = ogboard[i][j];
@@ -83,6 +81,7 @@ bool solve_seq(int **board, index_t *unAssignInd, int NunAssign, int *values, in
     }
         int indexx=unAssignInd[NunAssign].x;
         int indexy=unAssignInd[NunAssign].y;
+        
         for(int i = 0; i < sideSize; i++){
             //printf("index %d %d", indexx, indexy);
             int value = values[i];
@@ -98,6 +97,7 @@ bool solve_seq(int **board, index_t *unAssignInd, int NunAssign, int *values, in
                 
             } 
             board[indexx][indexy] = 0;     
+            
 
         }
     return false; 
@@ -129,7 +129,7 @@ bool solve(int **board, index_t *unAssignInd, int NunAssign, int *values, int si
                     
                         bool sol;
                         //avoid creating a new task for every cell -> workload too small
-                        if(depth < 25)
+                        if(depth < 0)
                         {
                             sol = solve(board, unAssignInd, NunAssign+1, values, sideSize, listsize, depth+1);
                            
@@ -215,7 +215,7 @@ int** readBoard(const char *filename, int *sideSize) {
         printf("\n");
         for(int j = 0; j < side; j ++){
             //printf("i %d j %d \n", i, j);
-            returnboard[i][j] = (int)board[i*side+j]; 
+            returnboard[i][j] = (int)(board[i * side + j] & 0xFF);
             printf("%d ", returnboard[i][j]);
             
         }
@@ -228,21 +228,21 @@ int** readBoard(const char *filename, int *sideSize) {
     return returnboard;
 }
 
-void onlyOneValid(int **board, int x, int y, int* values, int size)
+int** onlyOneValid(int **board, int x, int y, int* values, int size)
 {
     for(int i= 0; i < size; i++){
-        if(validateBoard(board, x, y, size*size, values[i]))
+        if(validateBoard(board, x, y, size*size, values[i])==true)
         {
             for(int j = i+1; j<size; j++)
             {
                 if(validateBoard(board, x, y,size, values[j] ))
                 {
-                    return;
+                    return board;
                 }
             }
             printf("found a coordinate with only one valid solution");
             board[x][y] = values[i];
-            return; 
+            return board; 
             
         }
     }
@@ -297,6 +297,53 @@ int** readtxt(const char *filename, int *sideSize) {
 
     return board;
 }
+
+int is_valid(int** board, int row, int col, int num, int size, int base) {
+    for (int i = 0; i < size; i++) {
+        if (board[row][i] == num || board[i][col] == num) return 0;
+    }
+    
+    int box_start_row = (row / base) * base;
+    int box_start_col = (col / base) * base;
+    
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 3; j++) {
+            if (board[box_start_row + i][box_start_col + j] == num) return 0;
+        }
+    }
+    
+    return 1;
+}
+
+// Function to fill cells with only one valid option
+void fill_single_option_cells(int** board, int size, int base) {
+    int changed;
+    
+    do {
+        changed = 0;
+        
+        for (int row = 0; row < size; row++) {
+            for (int col = 0; col < size; col++) {
+                if (board[row][col] == 0) { // Empty cell
+                    int valid_count = 0, last_valid = 0;
+                    
+                    for (int num = 1; num <= 9; num++) {
+                        if (is_valid(board, row, col, num, size, base)) {
+                            valid_count++;
+                            last_valid = num;
+                        }
+                    }
+                    
+                    if (valid_count == 1) { // Only one option
+                        board[row][col] = last_valid;
+                        changed = 1; // Mark that we changed something
+                    }
+                }
+            }
+        }
+    } while (changed); // Repeat until no more changes are made
+}
+
 int main(int argc,char *argv[]){
 
     if(argc < 2)
@@ -314,9 +361,10 @@ int main(int argc,char *argv[]){
     index_t * index = findEmptyCoord(solution, *sideSize, listsize); 
     printf("listsize before %d", *listsize);
 
-    for(int i = 0; i < 51; i++){
-        onlyOneValid(solution, index[i].x, index[i].y, values, (*sideSize));
-    }
+    //fill_single_option_cells(solution, 25, 5);
+    //for(int i = 0; i < *listsize; i++){
+        //onlyOneValid(solution, index[i].x, index[i].y, values, (*sideSize));
+    //}
     
     index = findEmptyCoord(solution, *sideSize, listsize); 
     printf("listsize after %d", *listsize);
