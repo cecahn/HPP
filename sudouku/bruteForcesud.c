@@ -4,7 +4,9 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <math.h>
+
 int ** solution;
+bool solved = false; 
 
 
 int ** allocateBoard(int size) {
@@ -24,6 +26,8 @@ int ** copyBoard(int size, int **ogboard){
     for (int i = 0; i < size; i++) {
         board[i] = row + size * i;
     }
+
+    
 
     for (int i = 0; i <size; i ++){
         for(int j = 0; j <size; j ++){
@@ -70,43 +74,94 @@ bool validateBoard(int ** board, int x, int y, int boardSize, int value)
     
 }
 
-bool solve(int **board, index_t *unAssignInd, int NunAssign, int *values, int sideSize, int listsize, int depth)
-{
-    //printf("Thread %d executing solve()\n", omp_get_thread_num());
-    int i = 0; 
-    if(NunAssign >= listsize )
+bool solve_seq(int **board, index_t *unAssignInd, int NunAssign, int *values, int sideSize, int listsize){
+    
+    if(NunAssign == listsize )
     {
-        solution = board; 
+        //solution = board; 
         return true; 
     }
-    
         int indexx=unAssignInd[NunAssign].x;
         int indexy=unAssignInd[NunAssign].y;
-
         for(int i = 0; i < sideSize; i++){
             //printf("index %d %d", indexx, indexy);
             int value = values[i];
             
             if(validateBoard(board, indexx, indexy, sideSize*sideSize, value)==true){
-                #pragma omp critical
+
                 board[indexx][indexy]=value;
+
+                bool sol = solve_seq(board, unAssignInd, NunAssign+1, values, sideSize, listsize);
+                if(sol){
+                    return true; 
+                }
                 
-                
-                    int **copyboard = copyBoard(sideSize, board); 
-                    #pragma omp task shared(sol) firstprivate(copyboard)
-                    {
-                        
-                        //printf("Thread %d creating a task\n", omp_get_thread_num());
-                        
-                        bool sol = solve(copyboard, unAssignInd, NunAssign+1, values, sideSize, listsize, depth); 
-                        
-                    }
-                    #pragma omp critical
-                    board[indexx][indexy] = 0;
-                
-            }      
+            } 
+            board[indexx][indexy] = 0;     
 
         }
+    return false; 
+}
+
+bool solve(int **board, index_t *unAssignInd, int NunAssign, int *values, int sideSize, int listsize, int depth)
+{
+    if(solved){return true;}
+    //printf("Thread %d executing solve()\n", omp_get_thread_num());
+    //int i = 0; 
+    
+    if(NunAssign >= listsize )
+    {
+        solved = true;
+        solution = board;
+        return true;  
+    }
+    
+        int indexx=unAssignInd[NunAssign].x;
+        int indexy=unAssignInd[NunAssign].y;
+
+            for(int i = 0; i < sideSize; i++){
+                //printf("index %d %d", indexx, indexy);
+                int value = values[i];
+                
+                if(validateBoard(board, indexx, indexy, sideSize*sideSize, value)==true){
+                    //#pragma omp critical
+                    board[indexx][indexy]=value;
+                    
+                        bool sol;
+                        //avoid creating a new task for every cell -> workload too small
+                        if(depth < 25)
+                        {
+                            sol = solve(board, unAssignInd, NunAssign+1, values, sideSize, listsize, depth+1);
+                           
+                        }
+                        else
+                        {  
+                            int **copyboard = copyBoard(sideSize, board);  
+                            #pragma omp task shared(sol) firstprivate(copyboard)
+                            {
+                                //printf("Thread %d creating a task\n", omp_get_thread_num());
+                                sol = solve(copyboard, unAssignInd, NunAssign+1, values, sideSize, listsize, 0); 
+                                
+                                if(sol){
+                                    //#pragma omp taskwait
+                                }
+                            }
+                            //cleanup(copyboard);
+                        }
+                        if(sol){
+                            return true; 
+                        }
+                        board[indexx][indexy] = 0;
+                        /*if (!sol){
+                            //solution = board;
+                            board[indexx][indexy] = 0;
+                        }*/
+                        
+                        //#pragma omp critical
+                          
+                }      
+        }
+        
     return false;      
 }
 
@@ -173,6 +228,75 @@ int** readBoard(const char *filename, int *sideSize) {
     return returnboard;
 }
 
+void onlyOneValid(int **board, int x, int y, int* values, int size)
+{
+    for(int i= 0; i < size; i++){
+        if(validateBoard(board, x, y, size*size, values[i]))
+        {
+            for(int j = i+1; j<size; j++)
+            {
+                if(validateBoard(board, x, y,size, values[j] ))
+                {
+                    return;
+                }
+            }
+            printf("found a coordinate with only one valid solution");
+            board[x][y] = values[i];
+            return; 
+            
+        }
+    }
+}
+
+int** readtxt(const char *filename, int *sideSize) {
+    FILE *file = fopen(filename, "r"); // Open in text mode
+    if (!file) {
+        perror("Failed to open file");
+        return NULL;
+    }
+
+    // Read side length from the file
+    if (fscanf(file, "%d", sideSize) != 1) {
+        printf("Invalid file format\n");
+        fclose(file);
+        return NULL;
+    }
+
+    int side = *sideSize;
+    printf("Side Length: %d\n", side);
+
+    // Allocate memory for the board
+    int **board = allocateBoard(side);
+    if (!board) {
+        printf("Memory allocation failed\n");
+        fclose(file);
+        return NULL;
+    }
+
+    // Read board numbers from the file
+    for (int i = 0; i < side; i++) {
+        for (int j = 0; j < side; j++) {
+            if (fscanf(file, "%d", &board[i][j]) != 1) {
+                printf("Invalid board data\n");
+                fclose(file);
+                return NULL;
+            }
+        }
+    }
+
+    fclose(file);
+
+    // Print the board
+    printf("Sudoku Board:\n");
+    for (int i = 0; i < side; i++) {
+        for (int j = 0; j < side; j++) {
+            printf("%2d ", board[i][j]);
+        }
+        printf("\n");
+    }
+
+    return board;
+}
 int main(int argc,char *argv[]){
 
     if(argc < 2)
@@ -182,36 +306,26 @@ int main(int argc,char *argv[]){
     char * filename= argv[1];
     int *side;
     int *sideSize = calloc(1, sizeof(int));
-    solution = readBoard(filename, sideSize);
-    //int **board2 = readBoard(filename, sideSize);
+    //solution = readBoard(filename, sideSize);
+    //int ** board = readBoard(filename, sideSize);
+    solution = readtxt(filename, sideSize);
     int* values = createValues(*sideSize);
-    //printf("values %d %d %d %d %d %d %d %d %d \n", values[0], values[1],values[2],values[3], values[4],values[5],values[6],values[7],values[8]);
     int * listsize = calloc(1, sizeof(int));
     index_t * index = findEmptyCoord(solution, *sideSize, listsize); 
+    printf("listsize before %d", *listsize);
+
+    for(int i = 0; i < 51; i++){
+        onlyOneValid(solution, index[i].x, index[i].y, values, (*sideSize));
+    }
+    
+    index = findEmptyCoord(solution, *sideSize, listsize); 
+    printf("listsize after %d", *listsize);
     for(int i = 0; i < 50; i++){
         //printf("x %d and y %d \n", index[i].x, index[i].y);
     }
     printf("running solve \n");
-
-    /*int **board2 = allocateBoard(9);
-    for (int i = 0; i < 9; i ++)
-    {
-        for(int j = 0; j<9; j++)
-        {
-            board2[i][j] = board[i][j];
-        }
-    }*/
-    
-    /*#pragma omp parallel num_threads(3)
-    {
-            //#pragma omp master
-            //{
-
-
-                int threadId = omp_get_thread_num();
-                solve(board, index, threadId, values, *sideSize, *listsize);
-            //}  
-    }*/
+  
+    //solve_seq(solution, index, 0, values, *sideSize, *listsize);
 
     #pragma omp parallel
     {
@@ -221,7 +335,7 @@ int main(int argc,char *argv[]){
             {
                     printf("Thread %d executing single\n", omp_get_thread_num());
 
-                    solve(solution, index, 0, values, *sideSize, *listsize, 0);
+                    solve(solution, index, 0, values, *sideSize, *listsize,0);
             }
     }
 
@@ -235,8 +349,21 @@ int main(int argc,char *argv[]){
             
         }
     }
+
     printf("\n");
 
+    /*for(int i =0; i< *sideSize; i++)
+    {
+        printf("\n");
+        for(int j = 0; j < *sideSize; j ++){
+            //printf("i %d j %d \n", i, j);
+            //board[i][j] = board[i*9+j]; 
+            printf("%d ", board[i][j]);
+            
+        }
+    }*/
+
     cleanup(solution);
+    //cleanup(board);
 
 }
