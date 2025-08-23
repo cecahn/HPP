@@ -4,37 +4,67 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <math.h>
+#include <sys/time.h>
+#include <omp.h>
 
 int ** solution;
 bool solved = false; 
 
-
-int ** allocateBoard(int size) {
-    int *row = (int*)calloc(size *size, sizeof(int)); 
-
-    int **board = (int**)calloc(size, sizeof(int*));
-    for (int i = 0; i < size; i++) {
-        board[i] = row + size * i;
-    }
-    return board; 
+static double get_wall_seconds() {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    double seconds = (double)tv.tv_sec + (double)tv.tv_usec / 1000000.0;
+    return seconds;
 }
 
-int ** copyBoard(int size, int **ogboard){
-    int *row = (int*)calloc(size *size, sizeof(int)); 
+int** allocateBoard(int size) {
+    int *row = (int*)calloc((size_t)(size * size), sizeof(int));
+    int **board = (int**)calloc((size_t)size, sizeof(int*));
 
-    int **board = (int**)calloc(size, sizeof(int*));
+    if (!row || !board) {
+        printf("Memory allocation failed\n");
+        free(row);
+        free(board);
+        return NULL;
+    }
+
+    #pragma omp parallel for
     for (int i = 0; i < size; i++) {
         board[i] = row + size * i;
     }
 
-    for (int i = 0; i <size; i ++){
-        for(int j = 0; j <size; j ++){
-            board[i][j] = ogboard[i][j];
+    return board;
+}
+
+int** copyBoard(int size, int **src) {
+    size_t boardSize = (size_t)size;
+
+    int *row = (int*)calloc(boardSize * boardSize, sizeof(int));
+    int **board = (int**)calloc(boardSize, sizeof(int*));
+
+    if (!row || !board) {
+        printf("Memory allocation failed\n");
+        free(row);
+        free(board);
+        return NULL;
+    }
+
+    #pragma omp parallel for
+    for (int i = 0; i < size; i++) {
+        board[i] = &row[i * size];
+    }
+
+    #pragma omp parallel for collapse(2)
+    for (int i = 0; i < size; i++) {
+        for (int j = 0; j < size; j++) {
+            board[i][j] = src[i][j];
         }
     }
 
     return board;
 }
+
+
 
 bool validateBoard(int ** board, int x, int y, int boardSize, int value)
 {
@@ -72,46 +102,14 @@ bool validateBoard(int ** board, int x, int y, int boardSize, int value)
     
 }
 
-bool solve_seq(int **board, index_t *unAssignInd, int NunAssign, int *values, int sideSize, int listsize){
-    
-    if(NunAssign == listsize )
-    {
-        //solution = board; 
-        return true; 
-    }
-        int indexx=unAssignInd[NunAssign].x;
-        int indexy=unAssignInd[NunAssign].y;
-        
-        for(int i = 0; i < sideSize; i++){
-            //printf("index %d %d", indexx, indexy);
-            int value = values[i];
-            
-            if(validateBoard(board, indexx, indexy, sideSize*sideSize, value)==true){
-
-                board[indexx][indexy]=value;
-
-                bool sol = solve_seq(board, unAssignInd, NunAssign+1, values, sideSize, listsize);
-                if(sol){
-                    return true; 
-                }
-                
-            } 
-            board[indexx][indexy] = 0;     
-            
-
-        }
-    return false; 
-}
-
-bool solve(int **board, index_t *unAssignInd, int NunAssign, int *values, int sideSize, int listsize, int depth)
+bool solve(int **board, index_t *unAssignInd, int NunAssign, int *values, int sideSize, int listsize, int depth, int depthvariable)
 {
     if(solved){return true;}
-    //printf("Thread %d executing solve()\n", omp_get_thread_num());
-    //int i = 0; 
     
     if(NunAssign >= listsize )
     {
         solved = true;
+        //make sure the latest board is returned
         solution = board;
         return true;  
     }
@@ -125,13 +123,13 @@ bool solve(int **board, index_t *unAssignInd, int NunAssign, int *values, int si
                 
                 if(validateBoard(board, indexx, indexy, sideSize*sideSize, value)==true){
                     //#pragma omp critical
+                    //no need for critical as only one thread updates the specific index at a time
                     board[indexx][indexy]=value;
-                    
                         bool sol;
                         //avoid creating a new task for every cell -> workload too small
-                        if(depth < 0)
+                        if(depth < depthvariable)
                         {
-                            sol = solve(board, unAssignInd, NunAssign+1, values, sideSize, listsize, depth+1);
+                            sol = solve(board, unAssignInd, NunAssign+1, values, sideSize, listsize, depth+1, depthvariable);
                            
                         }
                         else
@@ -140,24 +138,15 @@ bool solve(int **board, index_t *unAssignInd, int NunAssign, int *values, int si
                             #pragma omp task shared(sol) firstprivate(copyboard)
                             {
                                 //printf("Thread %d creating a task\n", omp_get_thread_num());
-                                sol = solve(copyboard, unAssignInd, NunAssign+1, values, sideSize, listsize, 0); 
+                                sol = solve(copyboard, unAssignInd, NunAssign+1, values, sideSize, listsize, 0, depthvariable); 
                                 
-                                if(sol){
-                                    //#pragma omp taskwait
-                                }
                             }
-                            //cleanup(copyboard);
+                            
                         }
                         if(sol){
                             return true; 
                         }
                         board[indexx][indexy] = 0;
-                        /*if (!sol){
-                            //solution = board;
-                            board[indexx][indexy] = 0;
-                        }*/
-                        
-                        //#pragma omp critical
                           
                 }      
         }
@@ -170,92 +159,14 @@ void cleanup (int **board){
     free(board);
 }
 
-int** readBoard(const char *filename, int *sideSize) {
-    FILE *file = fopen(filename, "rb"); // Open file in binary mode
-    if (!file) {
-        perror("Failed to open file");
-        return NULL;
-    }
-
-    // Read the base and side length (1-byte each)
-    uint8_t base, side;
-    fread(&base, sizeof(uint8_t), 1, file);
-    fread(&side, sizeof(uint8_t), 1, file);
-
-    printf("Base: %2d, Side Length: %2d\n", base, side);
-
-    // Allocate memory for the board
-    uint8_t size = side * side;
-    *sideSize = side; 
-    //*tside = (int)side;
-    //*tside = side; 
-    uint8_t *board = (uint8_t*)malloc(size * sizeof(uint8_t));
-    if (!board) {
-        printf("Memory allocation failed\n");
-        fclose(file);
-        return NULL;
-    }
-
-    // Read the board numbers
-    fread(board, sizeof(uint8_t), size, file);
-
-    int **returnboard = allocateBoard(side); 
-    //fread(returnboard[0], sizeof(uint8_t), size, file);
-
-    
-    // Print the board
-    printf("Sudoku Board:\n");
-    printf("size %d \n", size);
-    for (uint8_t i = 0; i < size; i++) {
-        printf("%2d ", board[i]);
-        if ((i + 1) % side == 0) printf("\n"); // New row
-    }
-    for(int i =0; i< side; i++)
-    {
-        printf("\n");
-        for(int j = 0; j < side; j ++){
-            //printf("i %d j %d \n", i, j);
-            returnboard[i][j] = (int)(board[i * side + j] & 0xFF);
-            printf("%d ", returnboard[i][j]);
-            
-        }
-    }
-    printf("\n");
-
-    // Cleanup
-    free(board);
-    fclose(file);
-    return returnboard;
-}
-
-int** onlyOneValid(int **board, int x, int y, int* values, int size)
-{
-    for(int i= 0; i < size; i++){
-        if(validateBoard(board, x, y, size*size, values[i])==true)
-        {
-            for(int j = i+1; j<size; j++)
-            {
-                if(validateBoard(board, x, y,size, values[j] ))
-                {
-                    return board;
-                }
-            }
-            printf("found a coordinate with only one valid solution");
-            board[x][y] = values[i];
-            return board; 
-            
-        }
-    }
-}
 
 int** readtxt(const char *filename, int *sideSize) {
-    FILE *file = fopen(filename, "r"); // Open in text mode
+    FILE *file = fopen(filename, "r"); 
     if (!file) {
         perror("Failed to open file");
         return NULL;
     }
 
-    // Read side length from the file
     if (fscanf(file, "%d", sideSize) != 1) {
         printf("Invalid file format\n");
         fclose(file);
@@ -273,7 +184,6 @@ int** readtxt(const char *filename, int *sideSize) {
         return NULL;
     }
 
-    // Read board numbers from the file
     for (int i = 0; i < side; i++) {
         for (int j = 0; j < side; j++) {
             if (fscanf(file, "%d", &board[i][j]) != 1) {
@@ -298,95 +208,100 @@ int** readtxt(const char *filename, int *sideSize) {
     return board;
 }
 
-int is_valid(int** board, int row, int col, int num, int size, int base) {
-    for (int i = 0; i < size; i++) {
-        if (board[row][i] == num || board[i][col] == num) return 0;
+void convert_dat_to_txt(const char *input_file, const char *output_file) {
+    FILE *f = fopen(input_file, "rb");
+    if (!f) {
+        perror("Error opening input file");
+        return;
     }
-    
-    int box_start_row = (row / base) * base;
-    int box_start_col = (col / base) * base;
-    
-    for (int i = 0; i < 3; i++) {
-        for (int j = 0; j < 3; j++) {
-            if (board[box_start_row + i][box_start_col + j] == num) return 0;
+
+    unsigned char base, side;
+    if (fread(&base, 1, 1, f) != 1 || fread(&side, 1, 1, f) != 1) {
+        fprintf(stderr, "Error reading base or side length\n");
+        fclose(f);
+        return;
+    }
+
+    printf("Base: %d, Side Length: %d\n", base, side);
+
+    int size = side * side;
+    unsigned char *board = (unsigned char *)malloc(size);
+    if (!board) {
+        fprintf(stderr, "Memory allocation failed\n");
+        fclose(f);
+        return;
+    }
+
+    if (fread(board, 1, size, f) != (size_t)size) {
+        fprintf(stderr, "Warning: File size does not match expected board size!\n");
+        free(board);
+        fclose(f);
+        return;
+    }
+
+    fclose(f);
+
+    FILE *txt = fopen(output_file, "w");
+    if (!txt) {
+        perror("Error opening output file");
+        free(board);
+        return;
+    }
+
+    fprintf(txt, "%d\n\n", side);
+
+    for (int i = 0; i < side; i++) {
+        for (int j = 0; j < side; j++) {
+            fprintf(txt, "%d ", board[i * side + j]);
         }
+        fprintf(txt, "\n");
     }
-    
-    return 1;
+
+    fclose(txt);
+    free(board);
+
+    printf("Converted %s -> \n", input_file, output_file);
 }
 
-// Function to fill cells with only one valid option
-void fill_single_option_cells(int** board, int size, int base) {
-    int changed;
-    
-    do {
-        changed = 0;
-        
-        for (int row = 0; row < size; row++) {
-            for (int col = 0; col < size; col++) {
-                if (board[row][col] == 0) { // Empty cell
-                    int valid_count = 0, last_valid = 0;
-                    
-                    for (int num = 1; num <= 9; num++) {
-                        if (is_valid(board, row, col, num, size, base)) {
-                            valid_count++;
-                            last_valid = num;
-                        }
-                    }
-                    
-                    if (valid_count == 1) { // Only one option
-                        board[row][col] = last_valid;
-                        changed = 1; // Mark that we changed something
-                    }
-                }
-            }
-        }
-    } while (changed); // Repeat until no more changes are made
-}
 
 int main(int argc,char *argv[]){
 
-    if(argc < 2)
+    if(argc < 3)
     {
-        printf("please provide a filename");
+        printf("please provide a filename and the number of tasks");
     }
     char * filename= argv[1];
-    int *side;
+    int tasks = atoi(argv[2]);
     int *sideSize = calloc(1, sizeof(int));
     //solution = readBoard(filename, sideSize);
     //int ** board = readBoard(filename, sideSize);
-    solution = readtxt(filename, sideSize);
+
+    char *outputfile = "txt.txt";
+    convert_dat_to_txt(filename, outputfile);
+    solution = readtxt(outputfile, sideSize);
     int* values = createValues(*sideSize);
     int * listsize = calloc(1, sizeof(int));
     index_t * index = findEmptyCoord(solution, *sideSize, listsize); 
-    printf("listsize before %d", *listsize);
-
-    //fill_single_option_cells(solution, 25, 5);
-    //for(int i = 0; i < *listsize; i++){
-        //onlyOneValid(solution, index[i].x, index[i].y, values, (*sideSize));
-    //}
+    printf("listsize %d", *listsize);
     
-    index = findEmptyCoord(solution, *sideSize, listsize); 
-    printf("listsize after %d", *listsize);
-    for(int i = 0; i < 50; i++){
-        //printf("x %d and y %d \n", index[i].x, index[i].y);
-    }
     printf("running solve \n");
   
-    //solve_seq(solution, index, 0, values, *sideSize, *listsize);
-
+    //start parallel section
+    double start = get_wall_seconds(); 
     #pragma omp parallel
     {
         printf("Thread %d entering parallel region\n", omp_get_thread_num());
-                    
+            //only let one thread make the initial solve call      
             #pragma omp single
             {
                     printf("Thread %d executing single\n", omp_get_thread_num());
-
-                    solve(solution, index, 0, values, *sideSize, *listsize,0);
+                    solve(solution, index, 0, values, *sideSize, *listsize,0, tasks);
+                    
             }
     }
-
+    double end = get_wall_seconds(); 
+    printf("Time %f", end-start);
+    //print board
     for(int i =0; i< *sideSize; i++)
     {
         printf("\n");
@@ -400,18 +315,6 @@ int main(int argc,char *argv[]){
 
     printf("\n");
 
-    /*for(int i =0; i< *sideSize; i++)
-    {
-        printf("\n");
-        for(int j = 0; j < *sideSize; j ++){
-            //printf("i %d j %d \n", i, j);
-            //board[i][j] = board[i*9+j]; 
-            printf("%d ", board[i][j]);
-            
-        }
-    }*/
-
     cleanup(solution);
-    //cleanup(board);
 
 }

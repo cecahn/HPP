@@ -78,13 +78,10 @@ bool duplicateNumbersinBox(int **board, int x, int y, int size, int value){
             
         }
     }
-    
     return false;
-    
-     
-    
 }
 
+//find the un assigned cells in the board
 index_t *findEmptyCoord(int **board, int side, int *listsize) {
     index_t *index = calloc(side * side, sizeof(index_t));  // Allocate max possible
     if (!index) {
