@@ -1,3 +1,5 @@
+A parallel sudouku solver
+
 The code is compiled by running make
 
 To run the compiled code write
